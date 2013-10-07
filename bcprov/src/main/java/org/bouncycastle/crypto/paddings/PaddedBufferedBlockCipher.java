@@ -7,6 +7,9 @@ import org.bouncycastle.crypto.DataLengthException;
 import org.bouncycastle.crypto.InvalidCipherTextException;
 import org.bouncycastle.crypto.OutputLengthException;
 import org.bouncycastle.crypto.params.ParametersWithRandom;
+import org.bouncycastle.crypto.params.KeyParameter;
+import org.bouncycastle.crypto.params.ParametersWithIV;
+import org.bouncycastle.crypto.modes.CBCBlockCipher;
 
 /**
  * A wrapper class that allows block ciphers to be used to process data in
@@ -18,6 +21,26 @@ import org.bouncycastle.crypto.params.ParametersWithRandom;
 public class PaddedBufferedBlockCipher
     extends BufferedBlockCipher
 {
+    // load the aesni library.
+    private static boolean sLibaesniLoaded = true;
+    private boolean mUseAesniLib = false;
+    static
+    {
+        try
+        {
+            System.loadLibrary("aesni");
+        } catch(UnsatisfiedLinkError e) {
+            sLibaesniLoaded = false;
+        }
+    };
+    // Local key,IV and native method declarations
+    private byte[] aesKey;
+    private byte[] iV;
+    // The AESNI Encrypt,Decrypt function
+    private native int aesNI(byte[] in, byte[] key, byte[] out, byte[] iv, int len,
+                             int enc, int keylen);
+    // Check if hardware supports AESNI
+    private native int checkAesNI();
     BlockCipherPadding  padding;
 
     /**
@@ -32,6 +55,7 @@ public class PaddedBufferedBlockCipher
     {
         this.cipher = cipher;
         this.padding = padding;
+        this.iV = new byte[cipher.getBlockSize()];
 
         buf = new byte[cipher.getBlockSize()];
         bufOff = 0;
@@ -63,6 +87,9 @@ public class PaddedBufferedBlockCipher
         throws IllegalArgumentException
     {
         this.forEncryption = forEncryption;
+        mUseAesniLib = (sLibaesniLoaded == true &&
+                               checkAesNI() == 1 &&
+                               cipher.getAlgorithmName().equals("AES/CBC"));
 
         reset();
 
@@ -71,13 +98,39 @@ public class PaddedBufferedBlockCipher
             ParametersWithRandom    p = (ParametersWithRandom)params;
 
             padding.init(p.getRandom());
-
+            if (mUseAesniLib == true)
+            {
+                if (p.getParameters() instanceof ParametersWithIV)
+                {
+                    ParametersWithIV ivParam = (ParametersWithIV)p.getParameters();
+                    byte[] iv = ivParam.getIV();
+                    this.aesKey = ((KeyParameter)ivParam.getParameters()).getKey();
+                    System.arraycopy(iv, 0, iV, 0, iv.length); // is array copy really needed (align iv)?
+                }
+                else
+                {
+                    this.aesKey = ((KeyParameter)p.getParameters()).getKey();
+                }
+            }
             cipher.init(forEncryption, p.getParameters());
         }
         else
         {
             padding.init(null);
-
+            if (mUseAesniLib == true)
+            {
+                if (params instanceof ParametersWithIV)
+                {
+                    ParametersWithIV ivParam = (ParametersWithIV)params;
+                    byte[] iv = ivParam.getIV();
+                    this.aesKey = ((KeyParameter)ivParam.getParameters()).getKey();
+                    System.arraycopy(iv, 0, iV, 0, iv.length); // is array copy really needed (align iv)?
+                }
+                else
+                {
+                    this.aesKey = ((KeyParameter)params).getKey();
+                }
+            }
             cipher.init(forEncryption, params);
         }
     }
@@ -110,7 +163,7 @@ public class PaddedBufferedBlockCipher
     }
 
     /**
-     * return the size of the output buffer required for an update 
+     * return the size of the output buffer required for an update
      * an input of len bytes.
      *
      * @param len the length of the input.
@@ -187,7 +240,7 @@ public class PaddedBufferedBlockCipher
 
         int blockSize   = getBlockSize();
         int length      = getUpdateOutputSize(len);
-        
+
         if (length > 0)
         {
             if ((outOff + length) > out.length)
@@ -209,12 +262,38 @@ public class PaddedBufferedBlockCipher
             len -= gapLen;
             inOff += gapLen;
 
-            while (len > buf.length)
+            if (mUseAesniLib == true)
             {
-                resultLen += cipher.processBlock(in, inOff, out, outOff + resultLen);
+                // check for valid key length
+                if (aesKey.length != 32 && aesKey.length != 16 && aesKey.length != 24)
+                {
+                    throw new IllegalArgumentException("Key size should be 128,192,256 bits");
+                }
 
-                len -= blockSize;
-                inOff += blockSize;
+                // AESNI found, use this instead
+                int rem = 0;
+                rem = len - 1;
+                rem -= rem%16;
+                int retsize = 0;
+                // If the len of remaining input is greater than the block size, process it in native
+                if (len > buf.length)
+                {
+                    retsize = processNative(in, inOff, out, outOff + resultLen, rem);
+                }
+                len -= retsize;
+                resultLen += retsize;
+                inOff += retsize;
+            }
+            else
+            {
+                // Call the local process native function instead of the while loop calling into AESFastEngine
+                while (len > buf.length)
+                {
+                    resultLen += cipher.processBlock(in, inOff, out, outOff + resultLen);
+                    len -= blockSize;
+                    inOff += blockSize;
+                }
+
             }
         }
 
@@ -223,6 +302,63 @@ public class PaddedBufferedBlockCipher
         bufOff += len;
 
         return resultLen;
+    }
+
+    /**
+     * process an array of bytes in native methods, producing output if necessary.
+     * @brief processNative-This functions processes blocks of data in native code
+     * @param in the input byte array.
+     * @param inOff the offset at which the input data starts.
+     * @param inputLen the number of bytes to be copied out of the input array.
+     * @param out the space for any output that might be produced.
+     * @param outOff the offset from which the output will be copied.
+     * @return the number of output bytes copied to out.
+     * @exception DataLengthException if there isn't enough space in out.
+     * @exception IllegalStateException if the cipher isn't initialised.
+     */
+    private int processNative(
+        byte[]      in,
+        int         inOff,
+        byte[]      out,
+        int         outOff,
+        int         inputLen)
+        throws DataLengthException, IllegalStateException
+    {
+        int blockSize = cipher.getBlockSize();
+        int len = 0;
+        if (cipher instanceof CBCBlockCipher)
+        {
+            CBCBlockCipher cbc = (CBCBlockCipher)cipher;
+            byte[] input = new byte[inputLen];
+            byte[] output = new byte[inputLen];
+            System.arraycopy(in, inOff, input, 0, inputLen);       // TODO: arraycopy is it necessary
+            byte[] cbV = new byte[blockSize];
+            System.arraycopy(cbc.getCbcV(), 0, cbV, 0, blockSize); // TODO: arraycopy is it necessary
+            /* Pass '1' to the native if the current operation is encryption else
+             * pass a '0' indicating decryption
+             */
+            if (forEncryption == true)
+            {
+                len = aesNI(input, aesKey, output, cbV, inputLen, 1, aesKey.length);
+            }
+            else
+            {
+                len = aesNI(input, aesKey, output, cbV, inputLen, 0, aesKey.length);
+            }
+            System.arraycopy(output, 0, out, outOff, len);
+            if (forEncryption)
+            {
+                System.arraycopy(output, len - 16, cbV, 0, blockSize);
+                cbc.setCbcV(cbV);
+            }
+            else
+            {
+                System.arraycopy(input, inputLen - 16, cbV, 0, blockSize);
+                cbc.setCbcV(cbV);
+            }
+        }
+        return len;
+
     }
 
     /**
