@@ -30,6 +30,7 @@ ri_bcprov_src_files := $(filter-out \
  $(all_bcprov_src_files))
 
 include $(CLEAR_VARS)
+
 LOCAL_MODULE := bouncycastle
 LOCAL_MODULE_TAGS := optional
 LOCAL_SRC_FILES := $(android_bcprov_src_files)
@@ -38,6 +39,7 @@ LOCAL_JAVA_LIBRARIES := conscrypt core
 LOCAL_NO_STANDARD_LIBRARIES := true
 LOCAL_JARJAR_RULES := $(LOCAL_PATH)/jarjar-rules.txt
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
+
 include $(BUILD_JAVA_LIBRARY)
 
 # non-jarjar version to build okhttp-tests
@@ -90,7 +92,6 @@ bouncycastle-proguard-deadcode: $(full_classes_compiled_jar) $(full_java_libs)
 		-keepclassmembers "class * implements org.bouncycastle.crypto.paddings.BlockCipherPadding { \
 		    public java.lang.String getPaddingName(); \
 		}"
-
 ifeq ($(WITH_HOST_DALVIK),true)
     include $(CLEAR_VARS)
     LOCAL_MODULE := bouncycastle-hostdex
@@ -123,3 +124,5 @@ LOCAL_MODULE_TAGS := optional
 LOCAL_JAVA_LIBRARIES := bouncycastle-host
 LOCAL_ADDITIONAL_DEPENDENCIES := $(LOCAL_PATH)/Android.mk
 include $(BUILD_HOST_JAVA_LIBRARY)
+
+include $(call all-makefiles-under,$(LOCAL_PATH))
