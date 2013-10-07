@@ -45,7 +45,26 @@ public class CBCBlockCipher
     {
         return cipher;
     }
-
+    /**
+     * @brief Get the intermediate vector to the super class- for use with native code
+     * return the current cbcV for use with the native function.
+     * @hide
+     * @return the cuurent cbcV for use with the AESNI native function.
+     */
+    public byte[] getCbcV()
+    {
+        return cbcV;
+    }
+    /**
+     * @brief Get the intermediate vector from native and use it for the last block in java
+     * set the cbcV to the current value from the native function
+     * @hide
+     * @param the current vector to be used for the last round of operation
+     */
+    public void setCbcV(byte[] cbV)
+    {
+      this.cbcV=cbV;
+    }
     /**
      * Initialise the cipher and, possibly, the initialisation vector (IV).
      * If an IV isn't passed as part of the parameter, the IV will be all zeros.
@@ -199,7 +218,6 @@ public class CBCBlockCipher
          * copy ciphertext to cbcV
          */
         System.arraycopy(out, outOff, cbcV, 0, cbcV.length);
-
         return length;
     }
 
