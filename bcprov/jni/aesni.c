@@ -18,13 +18,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <memory.h>
-#ifdef __linux__
-#include <alloca.h>
-#ifndef _alloca
-#define _alloca alloca
-#endif
-#endif
-#include<string.h>
+#include <string.h>
 #include "iaesni.h"
 #include "AES.h"
 
@@ -61,10 +55,17 @@ JNIEXPORT jint JNICALL Java_com_android_org_bouncycastle_crypto_paddings_PaddedB
    jbyte *key=(*env)->GetByteArrayElements(env,keyArray,NULL);
    UCHAR *IV=(UCHAR*)test_init_vector;
    UCHAR *testVector = (UCHAR*)buffer;
-   UCHAR *testResult = (UCHAR*)_alloca(buffLen);
+   UCHAR *testResult = (UCHAR*)malloc(buffLen);
    UCHAR *testKey= (UCHAR*)key;
    //Number of blocks of Data
    int numBlocks=buffLen/BLOCK_SIZE;
+   //Validate parameters
+   if ((IV == NULL) || (testVector == NULL) || (testResult == NULL)
+      || (testKey == NULL))
+   {
+       buffLen = 0;
+       goto out;
+   }
    //Make sure last bytes are not left out
    if(numBlocks%BLOCK_SIZE!=0)
    {
@@ -73,7 +74,7 @@ JNIEXPORT jint JNICALL Java_com_android_org_bouncycastle_crypto_paddings_PaddedB
    //Initialize result array
    memset(testResult,0xee,buffLen);
 
-   int index=(Keylen>>3)-2;
+   int index= ((Keylen>>3)-2) & (0x3);
 
    //Call AESNI assembly functions to perform our operation switch according to keysize(128,192,256)
    (*operation_ptr[index][Enc])(testVector, testResult, testKey, numBlocks, IV);
@@ -83,9 +84,17 @@ JNIEXPORT jint JNICALL Java_com_android_org_bouncycastle_crypto_paddings_PaddedB
     (*env)->SetByteArrayRegion(env, outArray, 0 , buffLen, result);
 
     //Free memory
-    (*env)->ReleaseByteArrayElements(env,inArray,buffer,0);
-    (*env)->ReleaseByteArrayElements(env,keyArray,key,0);
-    (*env)->ReleaseByteArrayElements(env,init_vector,test_init_vector,0);
+out:
+    if (testResult) free(testResult);
+
+    if (buffer) (*env)->ReleaseByteArrayElements(env,inArray,buffer,0);
+
+    if (key) (*env)->ReleaseByteArrayElements(env,keyArray,key,0);
+
+    if (test_init_vector) {
+        (*env)->ReleaseByteArrayElements(env,init_vector,test_init_vector,0);
+    }
+
     return buffLen;
 }
 
