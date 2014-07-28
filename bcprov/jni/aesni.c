@@ -22,8 +22,6 @@
 #include "iaesni.h"
 #include "AES.h"
 
-
-
 #define BLOCK_SIZE (16)
 /**
  * Function to check if hardware supports AESNI
@@ -49,6 +47,14 @@ JNIEXPORT jint JNICALL Java_com_android_org_bouncycastle_crypto_paddings_PaddedB
        {intel_AES_dec128_CBC,intel_AES_enc128_CBC},
        {intel_AES_dec192_CBC,intel_AES_enc192_CBC},
        {intel_AES_dec256_CBC,intel_AES_enc256_CBC}};
+
+   //Operation must be in block size increments
+   //AES CBC type operations must be in block size multiples
+   if(buffLen%BLOCK_SIZE!=0)
+   {
+       return 0;
+   }
+
    //Copy contents to local buffer
    buffer= (*env)->GetByteArrayElements(env, inArray, NULL);
    test_init_vector=(*env)->GetByteArrayElements(env,init_vector,NULL);
@@ -65,11 +71,6 @@ JNIEXPORT jint JNICALL Java_com_android_org_bouncycastle_crypto_paddings_PaddedB
    {
        buffLen = 0;
        goto out;
-   }
-   //Make sure last bytes are not left out
-   if(numBlocks%BLOCK_SIZE!=0)
-   {
-       numBlocks++;
    }
    //Initialize result array
    memset(testResult,0xee,buffLen);
